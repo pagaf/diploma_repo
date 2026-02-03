@@ -1,0 +1,133 @@
+# ===============================
+# OpenEvolve config for Euclidean TSP (UB/LB co-evolution)
+# ===============================
+
+log_level: "INFO"
+max_iterations: 200 
+checkpoint_interval: 10
+
+llm:
+  primary_model: "Qwen"
+  primary_model_weight: 0.78
+  secondary_model: "Qwen" 
+  api_base: ""
+  temperature: 0.7
+  top_p: 0.95
+  max_tokens: 4096
+  timeout: 600   
+
+prompt:
+  system_message: |-
+    You evolve COMPLETE stdlib-only Python programs for Euclidean TSP that return BOTH:
+      • an upper-bound tour (permutation 0..n-1),
+      • a numeric lower bound (provable certificate, e.g., 1-tree / relaxations).
+
+    HARD API (the evaluator imports your module and calls):
+        from typing import List, Tuple, Dict, Any
+        Coord = Tuple[float, float]
+        def solve_tsp_bounds(coords: List[Coord]) -> Dict[str, Any]:
+            return {
+              "tour": List[int],                # UB: permutation 0..n-1
+              "lower_bound": float,             # LB: provable lower bound
+              "witness": {"pi": List[float]}    # optional HK potentials for recomputation
+            }
+
+    RULES:
+      • Pure Python stdlib only (no I/O, no network, no external bins).
+      • Deterministic if you use randomness → set explicit seeds.
+      • Output a SINGLE .py file (no extra text).
+      • The evaluator recomputes Held–Karp 1-tree LB from provided potentials.
+
+    >>> PRIMARY GOAL (every iteration must tighten BOTH sides)
+      Minimize avg relative gap: (UB − LB) / UB by:
+        • pushing LB UP (tighter certificate),
+        • pushing UB DOWN (better tour).
+      You MUST introduce NEW algorithmic mechanisms on BOTH UB and LB in EVERY submission.
+      Changing only constants (k/seeds/iters/alphas/time) is forbidden.
+
+    >>> REQUIRED NOVELTY PROOF (in-code, machine-checkable)
+      Your module MUST define:
+        __innovation_notes__: Dict[str, Any]
+          # WHAT changed (mechanisms) and WHY it reduces the gap.
+          # Be concrete (not just names). Include UB & LB details.
+        def program_signature() -> tuple
+          # Short tuple reflecting UB/LB families, neighborhoods, candidates, acceptance, LB step rule, time split.
+          # MUST differ from the previous best-known baseline NN+2opt+HK.
+      Additionally, define and CALL at import-time:
+        def validate_novelty():
+            """
+            Must assert that:
+              (1) UB contains >=1 mechanism NOT in NN+2opt baseline,
+              (2) LB contains >=1 mechanism beyond plain HK Polyak,
+              (3) program_signature() indicates at least TWO changed axes vs a simple NN+2opt+HK setup.
+            """
+          # If any check fails → raise AssertionError("NoNovelty")
+        validate_novelty()
+
+    >>> MANDATORY ARCHITECTURE (make ideas explicit & swappable)
+      Provide these EXACT functions:
+        - build_candidate_graph(coords) -> Dict[int, List[int]] (or similar)
+        - construct_tour(coords, cand) -> List[int]
+        - improve_tour(tour, coords, cand, time_budget_s) -> List[int]
+        - compute_lower_bound(coords, ub_len_hint, time_budget_s) -> Tuple[float, List[float]]
+      Inside solve_tsp_bounds, enforce a deterministic time split between construction/improvement/LB (encode it in code).
+
+    >>> FORBIDDEN BASELINE & WEAK PATTERNS (auto-reject via validate_novelty)
+      - UB that is only NN + 2-opt on plain k-NN candidates.
+      - LB that is only HK Polyak step without restarts/root switching/volume/bundle.
+      - “New” code that only changes constants, seeds, or loop limits.
+
+    >>> UB MECHANISM MENU (pick ≥2 on UB side each iteration; at least one must be NEW vs your previous iteration)
+      Construction:
+        - Christofides (MST+perfect matching via greedy surrogate) before local search;
+        - Greedy insertion (nearest/farthest/cheapest) with tie-breaking by angle.
+      Neighborhood & search:
+        - Or-opt(1–3); selective 3-opt; LK-lite edge-pair exchanges;
+        - Ejection chains (simple 1-exchange chain); Ruin&Recreate (Shaw-like);
+        - Double-bridge kicks on stagnation; First-vs-Best improvement with aspiration.
+      Candidates (must differ from plain k-NN):
+        - Angle/sector buckets with per-sector k cap; α-near around MST edges;
+        - Length+angle filters; “watchlist” from insertion or MST.
+
+    >>> LB MECHANISM MENU (pick ≥1 NEW each iteration)
+      - HK subgradient with volume/bundle-like step control + scheduled restarts;
+      - Root switching by current degree / dual slack;
+      - Simple 2-matching relaxation (blossom-free bound);
+      - Geometric/partition LB (grid/quad-tree) with explicit cross-cell boundary correction.
+      Keep numerics stable (clip duals, deterministic order). If deg==2 (tour), early-stop.
+
+    >>> INSTRUMENTATION (strongly encouraged for speed/quality)
+      - Fast delta-evaluation for added moves (O(1) per 2-opt/Or, selective checks for 3-opt).
+      - Sparse informed candidates (angle/MST) instead of dense all-pairs checks.
+
+    >>> OUTPUT CONTRACT
+      Return exactly {"tour": List[int], "lower_bound": float, "witness": {"pi": List[float]}}
+      Clamp LB ≤ UB and LB ≥ 0. Put HK potentials into witness["pi"] (empty if not used).
+
+    >>> DISQUALIFICATION
+      If validate_novelty() would fail, the submission is invalid (parameter-only tweaks or missing UB/LB innovations).
+
+  num_top_programs: 3
+  num_diverse_programs: 2
+
+
+=
+database:
+  db_path: " "
+  population_size: 40
+  archive_size: 15
+  num_islands: 3
+  elite_selection_ratio: 0.25
+  exploitation_ratio: 0.65
+  exploration_ratio: 0.35
+
+evaluator:
+  timeout: 600
+  parallel_evaluations: 2
+
+# ===============================
+# Эволюция
+# ===============================
+diff_based_evolution: true
+allow_full_rewrites: true
+max_code_length: 18000
